@@ -3,6 +3,7 @@ import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 
 const SIGNALS_URL = 'https://functions.poehali.dev/d7237be9-06c6-40aa-8f86-c2b4869f810d';
+const HISTORY_URL = 'https://functions.poehali.dev/8e384ed5-0916-4867-a0df-81e3ba797e7a';
 
 interface Signal {
   pair: string;
@@ -15,14 +16,17 @@ interface Signal {
   live: boolean;
 }
 
-const HISTORY = [
-  { pair: 'EUR/USD', dir: 'UP', tf: '1m', result: 'WIN', pl: '+82.5', acc: 94 },
-  { pair: 'USD/JPY', dir: 'DOWN', tf: '30с', result: 'WIN', pl: '+50.0', acc: 90 },
-  { pair: 'GBP/USD', dir: 'UP', tf: '2m', result: 'LOSS', pl: '-100.0', acc: 78 },
-  { pair: 'AUD/USD', dir: 'DOWN', tf: '5m', result: 'WIN', pl: '+120.0', acc: 96 },
-  { pair: 'EUR/JPY', dir: 'UP', tf: '15с', result: 'WIN', pl: '+38.0', acc: 81 },
-  { pair: 'USD/CAD', dir: 'DOWN', tf: '3m', result: 'WIN', pl: '+95.0', acc: 92 },
-];
+interface HistoryItem {
+  pair: string;
+  dir: string;
+  tf: string;
+  acc: number;
+  rsi: number | null;
+  stoch: number | null;
+  price: number | null;
+  result: string | null;
+  time: string;
+}
 
 const POSITIONS = [
   { pair: 'EUR/USD', dir: 'UP', amount: 50, tf: '1m', pl: 41.25, left: 42 },
@@ -41,12 +45,16 @@ const Index = () => {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [realWinrate, setRealWinrate] = useState<number | null>(null);
+  const [totalTrades, setTotalTrades] = useState(0);
 
   useEffect(() => {
     const t = setInterval(() => setTick((v) => v + 1), 1000);
     return () => clearInterval(t);
   }, []);
 
+  // Загрузка живых сигналов
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -56,6 +64,14 @@ const Index = () => {
         if (alive && data.signals) {
           setSignals(data.signals);
           setUpdatedAt(new Date());
+          // Авто-сохранение каждого нового сигнала в историю
+          data.signals.forEach((s: Signal) => {
+            fetch(HISTORY_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...s, result: null }),
+            }).catch(() => {});
+          });
         }
       } catch {
         // тихо игнорируем сетевые ошибки
@@ -71,13 +87,48 @@ const Index = () => {
     };
   }, [running]);
 
+  // Загрузка истории и реального винрейта
+  useEffect(() => {
+    let alive = true;
+    const loadHistory = async () => {
+      try {
+        const res = await fetch(HISTORY_URL);
+        const data = await res.json();
+        if (alive) {
+          setHistory(data.history || []);
+          if (data.total > 0) {
+            setRealWinrate(data.winrate);
+            setTotalTrades(data.total);
+          }
+        }
+      } catch {
+        // тихо
+      }
+    };
+    loadHistory();
+    const id = setInterval(loadHistory, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
   const visibleSignals = signals.filter((s) => activeTf.includes(s.tf));
 
   const toggleTf = (tf: string) =>
     setActiveTf((p) => (p.includes(tf) ? p.filter((x) => x !== tf) : [...p, tf]));
 
-  const dayPL = 287.35;
-  const winrate = 89;
+  const saveResult = async (item: HistoryItem, result: 'WIN' | 'LOSS') => {
+    await fetch(HISTORY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...item, result }),
+    });
+    const res = await fetch(HISTORY_URL);
+    const data = await res.json();
+    setHistory(data.history || []);
+    if (data.total > 0) { setRealWinrate(data.winrate); setTotalTrades(data.total); }
+  };
+
+  const winrate = realWinrate ?? 0;
+  const dayPL = history.filter(h => h.result === 'WIN').length * posSize * 0.82;
 
   return (
     <div className="min-h-screen bg-background text-foreground font-sans grid-bg">
@@ -113,9 +164,9 @@ const Index = () => {
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { label: 'Прибыль за день', value: `+$${dayPL}`, icon: 'TrendingUp', accent: 'up' },
-            { label: 'Винрейт сигналов', value: `${winrate}%`, icon: 'Target', accent: 'primary' },
-            { label: 'Сделок сегодня', value: '34', icon: 'Layers', accent: 'fg' },
+            { label: 'Расчётная прибыль', value: dayPL > 0 ? `+$${dayPL.toFixed(0)}` : '$0', icon: 'TrendingUp', accent: 'up' },
+            { label: 'Реальный винрейт', value: realWinrate !== null ? `${winrate}%` : '—', icon: 'Target', accent: 'primary' },
+            { label: 'Сигналов в истории', value: `${totalTrades}`, icon: 'Layers', accent: 'fg' },
             { label: 'Сигналов в эфире', value: `${signals.length}`, icon: 'Globe', accent: 'fg' },
           ].map((s, i) => (
             <div
@@ -224,49 +275,80 @@ const Index = () => {
               </div>
             </div>
 
-            {/* History */}
+            {/* History from DB */}
             <div className="rounded-xl border border-border bg-card overflow-hidden">
-              <div className="flex items-center gap-2 p-4 border-b border-border">
-                <Icon name="History" size={18} className="text-primary" />
-                <h2 className="font-semibold">История сигналов и точность</h2>
+              <div className="flex items-center justify-between p-4 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <Icon name="History" size={18} className="text-primary" />
+                  <h2 className="font-semibold">История сигналов</h2>
+                  <span className="text-[10px] font-mono text-muted-foreground">из базы данных</span>
+                </div>
+                {realWinrate !== null && (
+                  <div className="flex items-center gap-2 text-xs font-mono">
+                    <span className="text-muted-foreground">Винрейт</span>
+                    <span className={`font-bold ${realWinrate >= 75 ? 'text-up' : 'text-down'}`}>{realWinrate}%</span>
+                    <span className="text-muted-foreground">/ {totalTrades} сделок</span>
+                  </div>
+                )}
               </div>
-              <div className="overflow-x-auto scrollbar-thin">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs text-muted-foreground font-mono border-b border-border">
-                      <th className="font-normal px-4 py-2.5">Пара</th>
-                      <th className="font-normal px-4 py-2.5">Сигнал</th>
-                      <th className="font-normal px-4 py-2.5">ТФ</th>
-                      <th className="font-normal px-4 py-2.5">Точность</th>
-                      <th className="font-normal px-4 py-2.5">Результат</th>
-                      <th className="font-normal px-4 py-2.5 text-right">P/L</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {HISTORY.map((h) => {
-                      const up = h.dir === 'UP';
-                      const win = h.result === 'WIN';
-                      return (
-                        <tr key={h.pair + h.tf} className="border-b border-border/50 last:border-0 hover:bg-secondary/30">
-                          <td className="px-4 py-3 font-mono font-medium">{h.pair}</td>
-                          <td className="px-4 py-3">
-                            <span className={`inline-flex items-center gap-1 text-xs font-medium ${up ? 'text-up' : 'text-down'}`}>
-                              <Icon name={up ? 'ArrowUp' : 'ArrowDown'} size={12} />{up ? 'Вверх' : 'Вниз'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 font-mono text-muted-foreground">{h.tf}</td>
-                          <td className="px-4 py-3 font-mono">{h.acc}%</td>
-                          <td className="px-4 py-3">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${win ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}>
-                              {win ? 'WIN' : 'LOSS'}
-                            </span>
-                          </td>
-                          <td className={`px-4 py-3 text-right font-mono font-semibold ${win ? 'text-up' : 'text-down'}`}>{h.pl}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="overflow-x-auto scrollbar-thin max-h-72 overflow-y-auto">
+                {history.length === 0 ? (
+                  <div className="p-8 text-center text-sm text-muted-foreground font-mono">
+                    История пуста — сигналы сохраняются автоматически
+                  </div>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-card">
+                      <tr className="text-left text-xs text-muted-foreground font-mono border-b border-border">
+                        <th className="font-normal px-4 py-2.5">Время</th>
+                        <th className="font-normal px-4 py-2.5">Пара</th>
+                        <th className="font-normal px-4 py-2.5">Сигнал</th>
+                        <th className="font-normal px-4 py-2.5">RSI / Stoch</th>
+                        <th className="font-normal px-4 py-2.5">Точность</th>
+                        <th className="font-normal px-4 py-2.5">Результат</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {history.map((h, idx) => {
+                        const up = h.dir === 'UP';
+                        const win = h.result === 'WIN';
+                        const loss = h.result === 'LOSS';
+                        return (
+                          <tr key={idx} className="border-b border-border/50 last:border-0 hover:bg-secondary/30">
+                            <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{h.time}</td>
+                            <td className="px-4 py-2.5 font-mono font-medium text-sm">{h.pair}</td>
+                            <td className="px-4 py-2.5">
+                              <span className={`inline-flex items-center gap-1 text-xs font-medium ${up ? 'text-up' : 'text-down'}`}>
+                                <Icon name={up ? 'ArrowUp' : 'ArrowDown'} size={11} />
+                                {up ? 'Вверх' : 'Вниз'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
+                              {h.rsi ?? '—'} / {h.stoch ?? '—'}
+                            </td>
+                            <td className="px-4 py-2.5 font-mono text-xs">{h.acc}%</td>
+                            <td className="px-4 py-2.5">
+                              {win && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-up/15 text-up">WIN</span>}
+                              {loss && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-down/15 text-down">LOSS</span>}
+                              {!h.result && (
+                                <div className="flex gap-1">
+                                  <button
+                                    onClick={() => saveResult(h, 'WIN')}
+                                    className="text-[10px] font-bold px-2 py-0.5 rounded bg-up/10 text-up hover:bg-up/25 transition-colors"
+                                  >WIN</button>
+                                  <button
+                                    onClick={() => saveResult(h, 'LOSS')}
+                                    className="text-[10px] font-bold px-2 py-0.5 rounded bg-down/10 text-down hover:bg-down/25 transition-colors"
+                                  >LOSS</button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </div>
           </section>

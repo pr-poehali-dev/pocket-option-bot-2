@@ -1,0 +1,23 @@
+{
+  "tests": [
+    {
+      "name": "Получение истории",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Сохранение сигнала WIN",
+      "method": "POST",
+      "path": "/",
+      "body": {"pair": "EUR/USD", "dir": "UP", "tf": "1м", "acc": 92, "rsi": 28.5, "stoch": 15.0, "price": 1.14626, "result": "WIN"},
+      "expectedStatus": 200
+    },
+    {
+      "name": "CORS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    }
+  ]
+}
