@@ -89,11 +89,24 @@ def analyze(closes: List[float]) -> Dict[str, Any]:
     base = 75
     accuracy = min(100, base + strength * 10 + int(abs(50 - r) / 5))
 
+    # Время до входа в секундах:
+    # Чем сильнее перекупленность/перепроданность — тем быстрее входить
+    extremity = max(abs(r - 50), abs(s - 50)) / 50.0  # 0..1
+    if extremity > 0.7:
+        entry_in = 5
+    elif extremity > 0.5:
+        entry_in = 15
+    elif extremity > 0.3:
+        entry_in = 30
+    else:
+        entry_in = 60
+
     return {
         'dir': direction,
         'acc': accuracy,
         'rsi': round(r, 1),
         'stoch': round(s, 1),
+        'entry_in': entry_in,
     }
 
 
@@ -131,6 +144,7 @@ def handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             'rsi': res['rsi'],
             'stoch': res['stoch'],
             'price': price,
+            'entry_in': res.get('entry_in', 30),
             'live': ok,
         })
 

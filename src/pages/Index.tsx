@@ -13,6 +13,7 @@ interface Signal {
   rsi: number;
   stoch: number;
   price: number;
+  entry_in: number;
   live: boolean;
 }
 
@@ -45,12 +46,22 @@ const Index = () => {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [countdowns, setCountdowns] = useState<Record<string, number>>({});
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [realWinrate, setRealWinrate] = useState<number | null>(null);
   const [totalTrades, setTotalTrades] = useState(0);
 
   useEffect(() => {
-    const t = setInterval(() => setTick((v) => v + 1), 1000);
+    const t = setInterval(() => {
+      setTick((v) => v + 1);
+      setCountdowns((prev) => {
+        const next: Record<string, number> = {};
+        for (const key in prev) {
+          next[key] = prev[key] > 0 ? prev[key] - 1 : 0;
+        }
+        return next;
+      });
+    }, 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -64,6 +75,12 @@ const Index = () => {
         if (alive && data.signals) {
           setSignals(data.signals);
           setUpdatedAt(new Date());
+          // Инициализируем таймеры обратного отсчёта
+          const initial: Record<string, number> = {};
+          data.signals.forEach((s: Signal) => {
+            initial[s.pair] = s.entry_in ?? 30;
+          });
+          setCountdowns(initial);
           // Авто-сохранение каждого нового сигнала в историю
           data.signals.forEach((s: Signal) => {
             fetch(HISTORY_URL, {
@@ -253,6 +270,19 @@ const Index = () => {
                           <span>RSI {s.rsi}</span>
                           <span>Stoch {s.stoch}</span>
                         </div>
+                        {/* Таймер входа */}
+                        {(() => {
+                          const sec = countdowns[s.pair] ?? s.entry_in ?? 0;
+                          const urgent = sec <= 5;
+                          const ready = sec === 0;
+                          return (
+                            <div className={`inline-flex items-center gap-1.5 mt-1.5 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold w-fit
+                              ${ready ? 'bg-up/20 text-up animate-pulse-glow' : urgent ? 'bg-down/15 text-down' : 'bg-secondary text-muted-foreground'}`}>
+                              <Icon name={ready ? 'Zap' : 'Timer'} size={11} />
+                              {ready ? 'ВХОДИ СЕЙЧАС!' : `вход через ${sec}с`}
+                            </div>
+                          );
+                        })()}
                       </div>
                       <div className="hidden sm:block w-28">
                         <div className="flex justify-between text-[10px] font-mono mb-1">
