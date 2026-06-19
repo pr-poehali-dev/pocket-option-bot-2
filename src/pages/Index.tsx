@@ -2,14 +2,18 @@ import { useState, useEffect } from 'react';
 import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 
-const PAIRS = [
-  { pair: 'EUR/USD', dir: 'UP', acc: 94, tf: '1m', expiry: '00:42' },
-  { pair: 'GBP/JPY', dir: 'DOWN', acc: 88, tf: '30с', expiry: '00:18' },
-  { pair: 'AUD/CAD', dir: 'UP', acc: 91, tf: '2m', expiry: '01:30' },
-  { pair: 'USD/CHF', dir: 'UP', acc: 82, tf: '15с', expiry: '00:09' },
-  { pair: 'EUR/GBP', dir: 'DOWN', acc: 97, tf: '5m', expiry: '03:50' },
-  { pair: 'NZD/USD', dir: 'DOWN', acc: 85, tf: '3m', expiry: '02:12' },
-];
+const SIGNALS_URL = 'https://functions.poehali.dev/d7237be9-06c6-40aa-8f86-c2b4869f810d';
+
+interface Signal {
+  pair: string;
+  dir: string;
+  acc: number;
+  tf: string;
+  rsi: number;
+  stoch: number;
+  price: number;
+  live: boolean;
+}
 
 const HISTORY = [
   { pair: 'EUR/USD', dir: 'UP', tf: '1m', result: 'WIN', pl: '+82.5', acc: 94 },
@@ -34,11 +38,40 @@ const Index = () => {
   const [posSize, setPosSize] = useState(50);
   const [maxLoss, setMaxLoss] = useState(500);
   const [tick, setTick] = useState(0);
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setTick((v) => v + 1), 1000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch(SIGNALS_URL);
+        const data = await res.json();
+        if (alive && data.signals) {
+          setSignals(data.signals);
+          setUpdatedAt(new Date());
+        }
+      } catch {
+        // тихо игнорируем сетевые ошибки
+      } finally {
+        if (alive) setLoading(false);
+      }
+    };
+    load();
+    const id = setInterval(() => running && load(), 15000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [running]);
+
+  const visibleSignals = signals.filter((s) => activeTf.includes(s.tf));
 
   const toggleTf = (tf: string) =>
     setActiveTf((p) => (p.includes(tf) ? p.filter((x) => x !== tf) : [...p, tf]));
@@ -83,7 +116,7 @@ const Index = () => {
             { label: 'Прибыль за день', value: `+$${dayPL}`, icon: 'TrendingUp', accent: 'up' },
             { label: 'Винрейт сигналов', value: `${winrate}%`, icon: 'Target', accent: 'primary' },
             { label: 'Сделок сегодня', value: '34', icon: 'Layers', accent: 'fg' },
-            { label: 'Активных пар', value: '6 / 28', icon: 'Globe', accent: 'fg' },
+            { label: 'Сигналов в эфире', value: `${signals.length}`, icon: 'Globe', accent: 'fg' },
           ].map((s, i) => (
             <div
               key={s.label}
@@ -107,9 +140,14 @@ const Index = () => {
             <div className="rounded-xl border border-border bg-card overflow-hidden">
               <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b border-border">
                 <div className="flex items-center gap-2">
-                  <Icon name="Radar" size={18} className="text-primary" />
+                  <Icon name="Radar" size={18} className={`text-primary ${running && !loading ? 'animate-pulse-glow' : ''}`} />
                   <h2 className="font-semibold">Живые сигналы на вход</h2>
                   <span className="text-xs font-mono text-muted-foreground">75–100%</span>
+                  {updatedAt && (
+                    <span className="text-[10px] font-mono text-muted-foreground hidden md:inline">
+                      обновлено {updatedAt.toLocaleTimeString('ru-RU')}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-1 flex-wrap">
                   {TIMEFRAMES.map((tf) => (
@@ -129,7 +167,18 @@ const Index = () => {
               </div>
 
               <div className="divide-y divide-border">
-                {PAIRS.map((s, i) => {
+                {loading && (
+                  <div className="p-8 text-center text-sm text-muted-foreground font-mono">
+                    <Icon name="LoaderCircle" size={20} className="animate-spin mx-auto mb-2 text-primary" />
+                    Анализирую рынок и считаю осцилляторы…
+                  </div>
+                )}
+                {!loading && visibleSignals.length === 0 && (
+                  <div className="p-8 text-center text-sm text-muted-foreground font-mono">
+                    Нет сигналов по выбранным таймфреймам
+                  </div>
+                )}
+                {visibleSignals.map((s, i) => {
                   const up = s.dir === 'UP';
                   return (
                     <div
@@ -146,10 +195,12 @@ const Index = () => {
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${up ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}>
                             {up ? 'ВВЕРХ' : 'ВНИЗ'}
                           </span>
+                          <span className="font-mono text-xs text-muted-foreground">{s.price}</span>
                         </div>
                         <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground font-mono">
                           <span>ТФ {s.tf}</span>
-                          <span className="flex items-center gap-1"><Icon name="Clock" size={11} /> {s.expiry}</span>
+                          <span>RSI {s.rsi}</span>
+                          <span>Stoch {s.stoch}</span>
                         </div>
                       </div>
                       <div className="hidden sm:block w-28">
