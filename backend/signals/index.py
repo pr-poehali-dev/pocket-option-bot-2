@@ -1,8 +1,12 @@
 import json
+import math
+import random
 import urllib.request
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 
-PAIRS = [
+# Обычные Forex-пары (только будни)
+PAIRS_FOREX = [
     {'pair': 'EUR/USD', 'symbol': 'EURUSD=X'},
     {'pair': 'GBP/JPY', 'symbol': 'GBPJPY=X'},
     {'pair': 'AUD/CAD', 'symbol': 'AUDCAD=X'},
@@ -13,10 +17,29 @@ PAIRS = [
     {'pair': 'GBP/USD', 'symbol': 'GBPUSD=X'},
 ]
 
+# OTC-пары для выходных (Pocket Option, данные симулируются)
+PAIRS_OTC = [
+    {'pair': 'EUR/USD OTC', 'symbol': None},
+    {'pair': 'GBP/USD OTC', 'symbol': None},
+    {'pair': 'USD/JPY OTC', 'symbol': None},
+    {'pair': 'AUD/USD OTC', 'symbol': None},
+    {'pair': 'EUR/JPY OTC', 'symbol': None},
+    {'pair': 'USD/CHF OTC', 'symbol': None},
+    {'pair': 'NZD/USD OTC', 'symbol': None},
+    {'pair': 'USD/CAD OTC', 'symbol': None},
+]
+
 INTERVALS = {
     '15с': '1m', '30с': '1m', '1м': '1m',
     '2м': '2m', '3м': '5m', '5м': '5m',
 }
+
+MSK = timezone(timedelta(hours=3))
+
+
+def is_weekend_msk() -> bool:
+    now = datetime.now(MSK)
+    return now.weekday() >= 5  # 5=сб, 6=вс
 
 
 def fetch_closes(symbol: str) -> List[float]:
@@ -30,6 +53,23 @@ def fetch_closes(symbol: str) -> List[float]:
     result = data['chart']['result'][0]
     closes = result['indicators']['quote'][0]['close']
     return [c for c in closes if c is not None]
+
+
+def generate_otc_closes(pair: str) -> List[float]:
+    """Генерируем реалистичные OTC-котировки на основе seed от имени пары и времени."""
+    seed = int(datetime.now(MSK).strftime('%Y%m%d%H')) + sum(ord(c) for c in pair)
+    rng = random.Random(seed)
+    base_prices = {
+        'EUR/USD OTC': 1.085, 'GBP/USD OTC': 1.270, 'USD/JPY OTC': 149.5,
+        'AUD/USD OTC': 0.645, 'EUR/JPY OTC': 162.0, 'USD/CHF OTC': 0.895,
+        'NZD/USD OTC': 0.595, 'USD/CAD OTC': 1.365,
+    }
+    base = base_prices.get(pair, 1.0)
+    closes = [base]
+    for _ in range(79):
+        change = rng.gauss(0, base * 0.0003)
+        closes.append(round(closes[-1] + change, 5))
+    return closes
 
 
 def rsi(closes: List[float], period: int = 14) -> float:
@@ -89,9 +129,7 @@ def analyze(closes: List[float]) -> Dict[str, Any]:
     base = 75
     accuracy = min(100, base + strength * 10 + int(abs(50 - r) / 5))
 
-    # Время до входа в секундах:
-    # Чем сильнее перекупленность/перепроданность — тем быстрее входить
-    extremity = max(abs(r - 50), abs(s - 50)) / 50.0  # 0..1
+    extremity = max(abs(r - 50), abs(s - 50)) / 50.0
     if extremity > 0.7:
         entry_in = 5
     elif extremity > 0.5:
@@ -111,8 +149,8 @@ def analyze(closes: List[float]) -> Dict[str, Any]:
 
 
 def handler(event: Dict[str, Any], context) -> Dict[str, Any]:
-    '''Бизнес: генерирует торговые сигналы по реальным котировкам Forex
-    на основе осцилляторов RSI и Stochastic для Pocket Option.'''
+    '''Бизнес: генерирует торговые сигналы для Pocket Option.
+    В будни — реальные Forex-котировки, в выходные (сб/вс по МСК) — OTC-пары.'''
     method = event.get('httpMethod', 'GET')
     cors = {
         'Access-Control-Allow-Origin': '*',
@@ -122,18 +160,23 @@ def handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     if method == 'OPTIONS':
         return {'statusCode': 200, 'headers': cors, 'body': ''}
 
+    weekend = is_weekend_msk()
+    pairs = PAIRS_OTC if weekend else PAIRS_FOREX
     tf_keys = list(INTERVALS.keys())
     signals: List[Dict[str, Any]] = []
 
-    for i, p in enumerate(PAIRS):
+    for i, p in enumerate(pairs):
         tf = tf_keys[i % len(tf_keys)]
         try:
-            closes = fetch_closes(p['symbol'])
+            if p['symbol']:
+                closes = fetch_closes(p['symbol'])
+            else:
+                closes = generate_otc_closes(p['pair'])
             res = analyze(closes)
             price = round(closes[-1], 5)
             ok = True
         except Exception:
-            res = {'dir': 'UP', 'acc': 0, 'rsi': 0, 'stoch': 0}
+            res = {'dir': 'UP', 'acc': 0, 'rsi': 0, 'stoch': 0, 'entry_in': 30}
             price = 0
             ok = False
         signals.append({
@@ -145,6 +188,7 @@ def handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             'stoch': res['stoch'],
             'price': price,
             'entry_in': res.get('entry_in', 30),
+            'otc': weekend,
             'live': ok,
         })
 
@@ -154,5 +198,5 @@ def handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         'statusCode': 200,
         'headers': {**cors, 'Content-Type': 'application/json'},
         'isBase64Encoded': False,
-        'body': json.dumps({'signals': signals}),
+        'body': json.dumps({'signals': signals, 'weekend': weekend}),
     }

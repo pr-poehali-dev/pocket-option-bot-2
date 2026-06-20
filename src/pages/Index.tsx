@@ -14,6 +14,7 @@ interface Signal {
   stoch: number;
   price: number;
   entry_in: number;
+  otc: boolean;
   live: boolean;
 }
 
@@ -47,6 +48,7 @@ const Index = () => {
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [countdowns, setCountdowns] = useState<Record<string, number>>({});
+  const [isWeekend, setIsWeekend] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [realWinrate, setRealWinrate] = useState<number | null>(null);
   const [totalTrades, setTotalTrades] = useState(0);
@@ -75,6 +77,7 @@ const Index = () => {
         if (alive && data.signals) {
           setSignals(data.signals);
           setUpdatedAt(new Date());
+          setIsWeekend(data.weekend ?? false);
           // Инициализируем таймеры обратного отсчёта
           const initial: Record<string, number> = {};
           data.signals.forEach((s: Signal) => {
@@ -211,6 +214,11 @@ const Index = () => {
                   <Icon name="Radar" size={18} className={`text-primary ${running && !loading ? 'animate-pulse-glow' : ''}`} />
                   <h2 className="font-semibold">Живые сигналы на вход</h2>
                   <span className="text-xs font-mono text-muted-foreground">75–100%</span>
+                  {isWeekend && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-primary/15 text-primary font-mono">
+                      OTC · выходной
+                    </span>
+                  )}
                   {updatedAt && (
                     <span className="text-[10px] font-mono text-muted-foreground hidden md:inline">
                       обновлено {updatedAt.toLocaleTimeString('ru-RU')}
@@ -263,6 +271,9 @@ const Index = () => {
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${up ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}>
                             {up ? 'ВВЕРХ' : 'ВНИЗ'}
                           </span>
+                          {s.otc && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/15 text-primary">OTC</span>
+                          )}
                           <span className="font-mono text-xs text-muted-foreground">{s.price}</span>
                         </div>
                         <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground font-mono">
